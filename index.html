@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; connect-src 'self' https://*.supabase.co; img-src 'self' data:; frame-ancestors 'none'">
+<title>PPDB SMK Negeri 1 Bandung</title>
+<style>
+*{box-sizing:border-box}body{font-family:system-ui,sans-serif;margin:0;background:#f3f5f9;color:#1b2430}
+header{background:#0b3d91;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center}
+main{max-width:860px;margin:0 auto;padding:12px}.card{background:#fff;border-radius:10px;padding:14px;margin-bottom:12px;box-shadow:0 1px 3px #0002}
+input,select,textarea{width:100%;padding:9px;margin:4px 0 8px;border:1px solid #bbc;border-radius:6px;font:inherit}
+button{background:#0b3d91;color:#fff;border:0;border-radius:6px;padding:9px 14px;margin:2px;font:inherit;cursor:pointer}
+button.alt{background:#5b6b82}button.bad{background:#b3261e}button.ok{background:#1a7f37}
+.badge{padding:2px 8px;border-radius:99px;background:#e3e9f5;font-size:.85em}.new{font-weight:700}
+.row{border-top:1px solid #e3e6ee;padding:8px 0}small{color:#667}label{font-size:.9em;color:#445}
+</style>
+</head>
+<body>
+<header><b>PPDB SMK Negeri 1 Bandung</b><span id="who"></span></header>
+<main id="app">Memuat…</main>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
+<script>
+// === ISI DENGAN DATA PROYEK SUPABASE ANDA (Settings > API) ===
+const CFG = { url: 'GANTI_SUPABASE_URL', key: 'GANTI_ANON_KEY' };
+// anon key AMAN dipublikasikan; keamanan data dijaga RLS. JANGAN pakai service_role di sini.
+
+const sb = supabase.createClient(CFG.url, CFG.key);
+const $ = s => document.querySelector(s), app = $('#app');
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const tgl = d => new Date(d).toLocaleString('id-ID');
+const run = async f => { try { await f(); } catch (e) { alert(e.message || e); } };
+let me, prof, REG, DOCS = [], JL;
+
+async function init() {
+  const { data: { session } } = await sb.auth.getSession();
+  if (!session) { $('#who').innerHTML = ''; return authView(); }
+  me = session.user;
+  const { data } = await sb.from('profiles').select('*').eq('id', me.id).single();
+  prof = data;
+  $('#who').innerHTML = `${esc(prof.nama)} (${prof.role}) <button class="alt" onclick="keluar()">Keluar</button>`;
+  prof.role === 'panitia' ? panitia() : siswa();
+}
+window.keluar = () => sb.auth.signOut().then(init);
+
+function authView() {
+  app.innerHTML = `<div class="card"><h3>Masuk / Daftar Siswa</h3>
+  <input id="nm" placeholder="Nama lengkap (hanya untuk daftar)"><input id="em" type="email" placeholder="Email">
+  <input id="pw" type="password" placeholder="Password (min 8 karakter)">
+  <button onclick="login()">Masuk</button><button class="alt" onclick="daftar()">Daftar sebagai Siswa</button>
+  <p><small>Akun panitia dibuat oleh admin sekolah.</small></p></div>`;
+}
+window.login = () => run(async () => {
+  const { error } = await sb.auth.signInWithPassword({ email: $('#em').value, password: $('#pw').value });
+  if (error) throw error; init();
+});
+window.daftar = () => run(async () => {
+  if ($('#pw').value.length < 8) throw new Error('Password minimal 8 karakter');
+  if (!$('#nm').value.trim()) throw new Error('Nama wajib diisi');
+  const { data, error } = await sb.auth.signUp({ email: $('#em').value, password: $('#pw').value, options: { data: { nama: $('#nm').value.trim() } } });
+  if (error) throw error;
+  if (!data.session) alert('Cek email Anda untuk konfirmasi, lalu masuk.');
+  init();
+});
+
+async function infoBlock() {
+  const [n, p] = await Promise.all([
+    sb.from('notifikasi').select('*').order('created_at', { ascending: false }).limit(10),
+    sb.from('pengumuman').select('*').eq('terbit', true).order('created_at', { ascending: false }).limit(5)]);
+  return `<div class="card"><h3>Notifikasi</h3>${(n.data || []).map(x => `<p class="${x.dibaca ? '' : 'new'}">${esc(x.pesan)} <small>${tgl(x.created_at)}</small></p>`).join('') || '<small>Belum ada.</small>'}
+  <button class="alt" onclick="bacaSemua()">Tandai dibaca</button></div>
+  <div class="card"><h3>Pengumuman</h3>${(p.data || []).map(x => `<div class="row"><b>${esc(x.judul)}</b><br>${esc(x.isi)}<br><small>${tgl(x.created_at)}</small></div>`).join('') || '<small>Belum ada.</small>'}</div>`;
+}
+window.bacaSemua = () => run(async () => { await sb.from('notifikasi').update({ dibaca: true }).eq('dibaca', false); init(); });
+
+/* ================= SISWA ================= */
+async function siswa() {
+  const [j, r] = await Promise.all([
+    sb.from('jalur').select('*').eq('aktif', true).order('nama'),
+    sb.from('pendaftaran').select('*').eq('siswa_id', me.id).maybeSingle()]);
+  REG = r.data; DOCS = [];
+  if (REG) DOCS = (await sb.from('dokumen').select('*').eq('pendaftaran_id', REG.id)).data || [];
+  const J = j.data || [], edit = !REG || ['draft', 'revisi'].includes(REG.status), v = REG || {};
+  JL = J.find(x => x.id === v.jalur_id);
+  const f = (id, label, type = 'text') => `<label>${label}</label><input id="${id}" type="${type}" value="${esc(v[id])}">`;
+  app.innerHTML = `<div class="card"><h3>Status: <span class="badge">${esc(v.status || 'belum mendaftar')}</span></h3>
+  ${v.status === 'revisi' ? `<p><b>Catatan revisi panitia:</b> ${esc(v.catatan_revisi)}</p>` : ''}
+  ${v.status === 'diterima' ? '<p>Selamat, Anda dinyatakan DITERIMA.</p>' : ''}</div>
+  <div class="card"><h3>Data Pendaftaran</h3><fieldset ${edit ? '' : 'disabled'} style="border:0;padding:0">
+  ${f('nama_lengkap', 'Nama lengkap')}${f('nisn', 'NISN (10 digit)')}${f('asal_sekolah', 'Asal sekolah')}
+  ${f('tgl_lahir', 'Tanggal lahir', 'date')}${f('alamat', 'Alamat')}${f('no_hp', 'No. HP', 'tel')}
+  <label>Jalur</label><select id="jalur_id">${J.map(x => `<option value="${x.id}" ${x.id === v.jalur_id ? 'selected' : ''}>${esc(x.nama)}</option>`).join('')}</select>
+  <button onclick="simpan()">Simpan Data</button></fieldset></div>
+  ${REG && JL ? `<div class="card"><h3>Dokumen — jalur ${esc(JL.nama)}</h3>${JL.persyaratan.map(n => {
+    const d = DOCS.find(x => x.jenis === n);
+    return `<div class="row"><b>${esc(n)}</b> ${d ? '<span class="badge">terunggah</span>' : '<span class="badge">belum</span>'}
+    ${edit ? `<input type="file" accept=".pdf,.jpg,.jpeg,.png" onchange="unggah('${esc(n).replace(/'/g, '&#39;')}',this)">` : ''}</div>`;
+  }).join('')}<small>PDF/JPG/PNG, maks 2 MB.</small>
+  ${edit ? '<br><button class="ok" onclick="ajukan()">Ajukan Pendaftaran</button>' : ''}</div>` : ''}
+  ${await infoBlock()}`;
+}
+window.simpan = () => run(async () => {
+  const g = id => $('#' + id).value.trim();
+  const v = { siswa_id: me.id, jalur_id: g('jalur_id'), nama_lengkap: g('nama_lengkap'), nisn: g('nisn'),
+    asal_sekolah: g('asal_sekolah'), tgl_lahir: g('tgl_lahir'), alamat: g('alamat'), no_hp: g('no_hp') };
+  if (Object.values(v).some(x => !x)) throw new Error('Semua kolom wajib diisi');
+  if (!/^\d{10}$/.test(v.nisn)) throw new Error('NISN harus 10 digit angka');
+  const { error } = await sb.from('pendaftaran').upsert(v, { onConflict: 'siswa_id' });
+  if (error) throw error; init();
+});
+window.unggah = (jenis, inp) => run(async () => {
+  const f = inp.files[0]; if (!f) return;
+  const ext = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png' }[f.type];
+  if (!ext) throw new Error('Hanya PDF/JPG/PNG');
+  if (f.size > 2097152) throw new Error('Ukuran maksimal 2 MB');
+  const path = `${me.id}/${jenis.replace(/\W+/g, '_')}-${Date.now()}.${ext}`;
+  const up = await sb.storage.from('dokumen').upload(path, f, { contentType: f.type });
+  if (up.error) throw up.error;
+  const old = DOCS.find(x => x.jenis === jenis);
+  if (old) { await sb.from('dokumen').delete().eq('id', old.id); await sb.storage.from('dokumen').remove([old.path]); }
+  const { error } = await sb.from('dokumen').insert({ pendaftaran_id: REG.id, jenis, path });
+  if (error) throw error; init();
+});
+window.ajukan = () => run(async () => {
+  if (!confirm('Ajukan pendaftaran? Data terkunci sampai panitia memeriksa.')) return;
+  const { error } = await sb.from('pendaftaran').update({ status: 'diajukan' }).eq('id', REG.id);
+  if (error) throw error; init();
+});
+
+/* ================= PANITIA ================= */
+async function panitia() {
+  const [r, j, a] = await Promise.all([
+    sb.from('pendaftaran').select('*,jalur(nama),profiles(nama)').order('updated_at', { ascending: false }),
+    sb.from('jalur').select('*').order('nama'),
+    sb.from('pengumuman').select('*').order('created_at', { ascending: false })]);
+  const L = r.data || [];
+  app.innerHTML = `<div class="card"><h3>Pendaftar (${L.length})</h3>
+  <select id="flt" onchange="saring()"><option value="">Semua status</option>${['diajukan', 'revisi', 'terverifikasi', 'diterima', 'ditolak', 'draft'].map(s => `<option>${s}</option>`).join('')}</select>
+  <div id="daftar">${L.map(x => `<div class="row item" data-s="${x.status}">${esc(x.nama_lengkap)} — ${esc(x.jalur?.nama)} <span class="badge">${x.status}</span>
+  <button class="alt" onclick="detail('${x.id}')">Periksa</button></div>`).join('')}</div></div>
+  <div id="detail"></div>
+  <div class="card"><h3>Konfigurasi Jalur</h3>${(j.data || []).map(x => `<div class="row jr" data-id="${x.id}">
+  <input class="n" value="${esc(x.nama)}" placeholder="Nama jalur"><input class="k" type="number" min="0" value="${x.kuota}" placeholder="Kuota">
+  <input class="p" value="${esc(x.persyaratan.join(', '))}" placeholder="Dokumen wajib, pisahkan koma">
+  <label>Buka</label><input class="b" type="datetime-local" value="${x.buka ? x.buka.slice(0, 16) : ''}">
+  <label>Tutup</label><input class="t" type="datetime-local" value="${x.tutup ? x.tutup.slice(0, 16) : ''}">
+  <label><input class="a" type="checkbox" style="width:auto" ${x.aktif ? 'checked' : ''}> Aktif</label>
+  <button onclick="simpanJalur(this)">Simpan</button></div>`).join('')}
+  <button class="alt" onclick="jalurBaru()">+ Jalur baru</button></div>
+  <div class="card"><h3>Pengumuman</h3><input id="aj" placeholder="Judul"><textarea id="ai" placeholder="Isi"></textarea>
+  <label><input id="at" type="checkbox" style="width:auto"> Terbitkan</label> <button onclick="kirimPeng()">Simpan</button>
+  ${(a.data || []).map(x => `<div class="row"><b>${esc(x.judul)}</b> <span class="badge">${x.terbit ? 'terbit' : 'draft'}</span>
+  <button class="alt" onclick="togglePeng('${x.id}',${!x.terbit})">${x.terbit ? 'Tarik' : 'Terbitkan'}</button>
+  <button class="bad" onclick="hapusPeng('${x.id}')">Hapus</button></div>`).join('')}</div>
+  ${await notifPanitia()}`;
+}
+async function notifPanitia() {
+  const n = await sb.from('notifikasi').select('*').order('created_at', { ascending: false }).limit(10);
+  return `<div class="card"><h3>Notifikasi</h3>${(n.data || []).map(x => `<p class="${x.dibaca ? '' : 'new'}">${esc(x.pesan)} <small>${tgl(x.created_at)}</small></p>`).join('') || '<small>Belum ada.</small>'}
+  <button class="alt" onclick="bacaSemua()">Tandai dibaca</button></div>`;
+}
+window.saring = () => document.querySelectorAll('.item').forEach(e => e.style.display = !$('#flt').value || e.dataset.s === $('#flt').value ? '' : 'none');
+window.detail = id => run(async () => {
+  const [{ data: r }, { data: d }] = await Promise.all([
+    sb.from('pendaftaran').select('*,jalur(nama)').eq('id', id).single(),
+    sb.from('dokumen').select('*').eq('pendaftaran_id', id)]);
+  const urls = d.length ? (await sb.storage.from('dokumen').createSignedUrls(d.map(x => x.path), 300)).data : [];
+  $('#detail').innerHTML = `<div class="card"><h3>${esc(r.nama_lengkap)} <span class="badge">${r.status}</span></h3>
+  <p>NISN ${esc(r.nisn)} · ${esc(r.asal_sekolah)} · lahir ${esc(r.tgl_lahir)}<br>${esc(r.alamat)} · ${esc(r.no_hp)}<br>Jalur: ${esc(r.jalur?.nama)}</p>
+  ${d.map((x, i) => `<div class="row">${esc(x.jenis)}: ${urls[i]?.signedUrl ? `<a href="${esc(urls[i].signedUrl)}" target="_blank" rel="noopener">Buka (5 menit)</a>` : 'gagal'}</div>`).join('') || '<small>Tidak ada dokumen.</small>'}
+  <label>Catatan revisi (wajib bila minta revisi)</label><textarea id="cat">${esc(r.catatan_revisi)}</textarea>
+  <button class="ok" onclick="aksi('${id}','terverifikasi')">Verifikasi</button>
+  <button onclick="aksi('${id}','revisi')">Minta Revisi</button>
+  <button class="ok" onclick="aksi('${id}','diterima')">Terima</button>
+  <button class="bad" onclick="aksi('${id}','ditolak')">Tolak</button></div>`;
+  $('#detail').scrollIntoView();
+});
+window.aksi = (id, status) => run(async () => {
+  const cat = $('#cat').value.trim();
+  if (status === 'revisi' && !cat) throw new Error('Isi catatan revisi');
+  const { error } = await sb.from('pendaftaran').update({ status, catatan_revisi: status === 'revisi' ? cat : null }).eq('id', id);
+  if (error) throw error; init();
+});
+window.simpanJalur = btn => run(async () => {
+  const e = btn.closest('.jr'), q = c => e.querySelector(c);
+  const { error } = await sb.from('jalur').update({ nama: q('.n').value.trim(), kuota: +q('.k').value || 0,
+    persyaratan: q('.p').value.split(',').map(s => s.trim()).filter(Boolean), aktif: q('.a').checked,
+    buka: q('.b').value ? new Date(q('.b').value).toISOString() : null, tutup: q('.t').value ? new Date(q('.t').value).toISOString() : null }).eq('id', e.dataset.id);
+  if (error) throw error; alert('Tersimpan'); init();
+});
+window.jalurBaru = () => run(async () => { const { error } = await sb.from('jalur').insert({ nama: 'Jalur baru', kuota: 0, aktif: false }); if (error) throw error; init(); });
+window.kirimPeng = () => run(async () => {
+  if (!$('#aj').value.trim() || !$('#ai').value.trim()) throw new Error('Judul dan isi wajib');
+  const { error } = await sb.from('pengumuman').insert({ judul: $('#aj').value.trim(), isi: $('#ai').value.trim(), terbit: $('#at').checked });
+  if (error) throw error; init();
+});
+window.togglePeng = (id, t) => run(async () => { await sb.from('pengumuman').update({ terbit: t }).eq('id', id); init(); });
+window.hapusPeng = id => run(async () => { if (confirm('Hapus?')) { await sb.from('pengumuman').delete().eq('id', id); init(); } });
+
+sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT') init(); });
+init();
+</script>
+</body>
+</html>
